@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TPS Game</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    
+    <div id="ui-layer">
+      <div id="score">SCORE: 0</div>
+      <div id="hp-bar-container">
+        <div id="hp-bar"></div>
+      </div>
+      
+      <div id="game-over-screen" class="hidden">
+        <h1>GAME OVER</h1>
+        <button id="restart-btn">TRY AGAIN</button>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
