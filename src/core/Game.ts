@@ -5,13 +5,14 @@ import { CameraController } from './CameraController';
 import { Level } from '../entities/Level';
 import { Enemy } from '../entities/Enemy';
 import { EffectManager } from './EffectManager';
+import { SoundManager } from './SoundManager';
 
 export class Game {
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
   private renderer: THREE.WebGLRenderer;
   
-  private animationId: number | null = null;
+  // private animationId: number | null = null; // 削除
   private clock: THREE.Clock;
 
   private inputManager: InputManager;
@@ -19,6 +20,7 @@ export class Game {
   private cameraController: CameraController;
   private level: Level;
   private effectManager: EffectManager;
+  private soundManager: SoundManager;
   
   private enemies: Enemy[] = [];
 
@@ -34,7 +36,11 @@ export class Game {
   constructor() {
     // --- 基本設定 ---
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x222222);
+    
+    // 背景とフォグ
+    const skyColor = 0xa0a0a0; 
+    this.scene.background = new THREE.Color(skyColor);
+    this.scene.fog = new THREE.Fog(skyColor, 20, 60);
 
     this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
 
@@ -49,7 +55,7 @@ export class Game {
     this.clock = new THREE.Clock();
 
     // --- ライト ---
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
     this.scene.add(ambientLight);
     const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
     dirLight.position.set(5, 15, 10);
@@ -60,15 +66,18 @@ export class Game {
     // --- 各要素の初期化 ---
     this.level = new Level(this.scene);
     this.effectManager = new EffectManager(this.scene);
+    this.soundManager = new SoundManager();
 
     // 敵の配置
     this.enemies.push(new Enemy(this.scene, new THREE.Vector3(0, 0, 5)));
     this.enemies.push(new Enemy(this.scene, new THREE.Vector3(-5, 0, 8)));
     this.enemies.push(new Enemy(this.scene, new THREE.Vector3(5, 0, 8)));
 
+    // クラスのインスタンス化
     this.inputManager = new InputManager();
     this.player = new Player(this.scene);
     
+    // カメラコントローラー
     this.cameraController = new CameraController(this.camera);
     this.cameraController.setTarget(this.player.mesh);
 
@@ -77,13 +86,18 @@ export class Game {
     this.hpBarElement = document.getElementById('hp-bar') as HTMLElement;
     this.gameOverScreen = document.getElementById('game-over-screen') as HTMLElement;
 
-    // リスタートボタンの設定（単純にページリロード）
+    // リスタートボタンの設定
     const restartBtn = document.getElementById('restart-btn');
     if (restartBtn) {
       restartBtn.addEventListener('click', () => {
         location.reload();
       });
     }
+
+    // 最初のクリックで攻撃音の空打ちをしてAudioContextを起動する
+    window.addEventListener('click', () => {
+      this.soundManager.playAttack(); 
+    }, { once: true });
   }
 
   public start(): void {
@@ -91,74 +105,62 @@ export class Game {
   }
 
   private animate(): void {
-    this.animationId = requestAnimationFrame(this.animate.bind(this));
+    // 戻り値を受け取らないように修正
+    requestAnimationFrame(this.animate.bind(this));
+    
     const delta = this.clock.getDelta();
     this.update(delta);
     this.render();
   }
 
   private update(delta: number): void {
-    if (this.isGameOver) return; // ゲームオーバーなら更新停止
+    if (this.isGameOver) return;
 
     this.inputManager.update();
 
     const playerPos = this.player.mesh.position;
     
-    // --- 敵の処理と衝突判定 ---
+    // --- 敵の処理 ---
     this.enemies.forEach(enemy => {
-      // 敵の更新
       enemy.update(delta, playerPos, this.enemies);
 
-      // スコア加算判定（死んだ瞬間のフラグ管理が簡易的なので、HPを見て判断）
-      // 本来はEnemyクラスでイベントを発火するのが良いですが、今回は簡易的に
-      if (enemy.isDead && enemy.mesh.visible) {
-        // すでに死んでいる敵は無視したいが、今回は倒れた敵も残り続ける仕様なので
-        // スコア加算は「倒した瞬間」にしたい。
-        // ※Enemy.ts側でスコア加算を呼ぶか、Game側で管理するか。
-        // ここではシンプルに「Game側でHPを見て、死んでたらフラグを立てる」方式が面倒なので
-        // 敵の配列から生存者だけフィルタリングする方式はとらず、
-        // 攻撃ヒット時にEnemyクラス内で加算コールバックをするのが理想。
-        // ですが、今回は「スコアは攻撃ヒット時」ではなく「倒した時」にしたい...
-        // 簡易実装として「攻撃ヒット時」にスコアを増やしましょう。
-      }
-      
-      // ★プレイヤーへのダメージ判定
       if (!enemy.isDead) {
         const dist = playerPos.distanceTo(enemy.mesh.position);
-        // 敵が近くにいて（1.5m以内）、プレイヤーが無敵でなければ
         if (dist < 1.5) {
-          this.player.takeDamage(1);
-          // 敵も少しノックバックさせると良いが今回は省略
+          this.player.takeDamage(1, this.soundManager);
         }
       }
     });
 
-    // 死んだ敵からスコアを得る（簡易実装：Enemyクラスをいじらずここで計算するのは難しいので、
-    // Playerが攻撃を当てた時にスコアを加算するように変更します）
-    // ※今回は「攻撃ヒット＝100点」にします。
-
+    // エフェクト更新
     this.effectManager.update(delta);
-    this.player.update(delta, this.inputManager, this.camera, this.level.obstacles, this.enemies, this.effectManager);
+    
+    // --- プレイヤーの更新 ---
+    this.player.update(
+      delta, 
+      this.inputManager, 
+      this.camera, 
+      this.level.obstacles, 
+      this.enemies, 
+      this.effectManager, 
+      this.soundManager
+    );
+    
+    // カメラ更新
     this.cameraController.update(this.inputManager);
 
     // --- UI更新 ---
-    
-    // HPバーの更新
     const hpPercent = (this.player.hp / this.player.maxHp) * 100;
     this.hpBarElement.style.width = `${hpPercent}%`;
-    
-    // HPに応じて色を変える演出
-    if (hpPercent > 50) this.hpBarElement.style.backgroundColor = '#00ff00'; // 緑
-    else if (hpPercent > 20) this.hpBarElement.style.backgroundColor = '#ffff00'; // 黄
-    else this.hpBarElement.style.backgroundColor = '#ff0000'; // 赤
+    if (hpPercent > 50) this.hpBarElement.style.backgroundColor = '#00ff00';
+    else if (hpPercent > 20) this.hpBarElement.style.backgroundColor = '#ffff00';
+    else this.hpBarElement.style.backgroundColor = '#ff0000';
 
-    // スコア更新（Player.checkAttackHit内で敵を倒した判定を取るのが綺麗ですが、
-    // ここでは「倒された敵の数」を数える方式に変えます）
     const deadCount = this.enemies.filter(e => e.isDead).length;
-    this.score = deadCount * 1000; // 1体1000点
+    this.score = deadCount * 1000;
     this.scoreElement.innerText = `SCORE: ${this.score}`;
 
-    // --- ゲームオーバー判定 ---
+    // ゲームオーバー判定
     if (this.player.hp <= 0) {
       this.isGameOver = true;
       this.gameOverScreen.classList.remove('hidden');

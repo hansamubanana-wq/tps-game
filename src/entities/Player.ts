@@ -3,25 +3,26 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { InputManager } from '../core/InputManager';
 import { Enemy } from './Enemy';
 import { EffectManager } from '../core/EffectManager';
+import { SoundManager } from '../core/SoundManager';
 
-type PlayerState = 'Idle' | 'Run' | 'Roll' | 'Attack' | 'Dead'; // Dead追加
+type PlayerState = 'Idle' | 'Run' | 'Roll' | 'Attack' | 'Dead';
 
 export class Player {
   public mesh: THREE.Group;
   
   // パラメータ
-  public maxHp: number = 5; // ★追加：最大HP
-  public hp: number = 5;    // ★追加：現在のHP
+  public maxHp: number = 5;
+  public hp: number = 5;
   
   private moveSpeed: number = 8.0;
   private rollSpeed: number = 20.0;
   private rollDuration: number = 0.5;
   private attackDuration: number = 0.5;
 
-  // 無敵時間（ダメージ後の点滅タイム）
+  // 無敵時間
   private isInvincible: boolean = false;
   private invincibleTimer: number = 0;
-  private invincibleDuration: number = 1.0; // 1秒無敵
+  private invincibleDuration: number = 1.0;
 
   private mixer: THREE.AnimationMixer | null = null;
   private actions: { [key: string]: THREE.AnimationAction } = {};
@@ -66,7 +67,6 @@ export class Player {
       this.actions['Idle'] = this.mixer.clipAction(animations[0]);
       this.actions['Run'] = this.mixer.clipAction(animations[1]);
       this.actions['Attack'] = this.mixer.clipAction(animations[3]);
-      // 死亡モーションとしてIdleを流用（倒す処理はコードで行う）
       this.actions['Dead'] = this.mixer.clipAction(animations[0]); 
 
       this.switchState('Idle');
@@ -77,7 +77,6 @@ export class Player {
     this.state = newState;
     this.stateTimer = 0;
 
-    // 前のアクションをストップ
     this.mixer?.stopAllAction();
 
     const action = this.actions[newState === 'Roll' ? 'Run' : newState];
@@ -96,7 +95,15 @@ export class Player {
     }
   }
 
-  public update(dt: number, input: InputManager, camera: THREE.Camera, obstacles: THREE.Object3D[], enemies: Enemy[], effectManager: EffectManager): void {
+  public update(
+    dt: number, 
+    input: InputManager, 
+    camera: THREE.Camera, 
+    obstacles: THREE.Object3D[], 
+    enemies: Enemy[], 
+    effectManager: EffectManager,
+    soundManager: SoundManager
+  ): void {
     if (!this.mixer) return;
     this.mixer.update(dt);
 
@@ -105,14 +112,13 @@ export class Player {
         this.invincibleTimer -= dt;
         if (this.invincibleTimer <= 0) {
             this.isInvincible = false;
-            this.mesh.visible = true; // 表示を戻す
+            this.mesh.visible = true;
         } else {
-            // 点滅処理（0.1秒ごとに表示/非表示）
             this.mesh.visible = Math.floor(this.invincibleTimer * 10) % 2 === 0;
         }
     }
 
-    if (this.state === 'Dead') return; // 死んでたら操作不能
+    if (this.state === 'Dead') return;
 
     switch (this.state) {
       case 'Idle':
@@ -125,21 +131,22 @@ export class Player {
         this.updateRoll(dt, obstacles);
         break;
       case 'Attack':
-        this.updateAttack(dt, enemies, effectManager);
+        this.updateAttack(dt, enemies, effectManager, soundManager);
         break;
     }
   }
 
-  // ★追加：ダメージを受ける処理
-  public takeDamage(amount: number): void {
+  public takeDamage(amount: number, soundManager: SoundManager): void {
     if (this.isInvincible || this.state === 'Dead' || this.state === 'Roll') return;
 
     this.hp -= amount;
+    
+    soundManager.playDamage();
+
     if (this.hp <= 0) {
         this.hp = 0;
         this.die();
     } else {
-        // ダメージを受けたので無敵時間開始
         this.isInvincible = true;
         this.invincibleTimer = this.invincibleDuration;
         console.log(`Player HP: ${this.hp}`);
@@ -148,15 +155,15 @@ export class Player {
 
   private die(): void {
     this.switchState('Dead');
-    // パタンと倒れる
     this.mesh.rotation.x = -Math.PI / 2;
     this.mesh.position.y = 0.5;
     console.log("Player Died...");
   }
 
-  // --- 以下、既存の更新ロジック ---
+  // --- 更新ロジック ---
 
-  private updateIdle(dt: number, input: InputManager, camera: THREE.Camera): void {
+  // 未使用の引数に _ を付けました
+  private updateIdle(_dt: number, input: InputManager, _camera: THREE.Camera): void {
     if (input.isAttackPressed) { this.switchState('Attack'); return; }
     if (input.moveVector.x !== 0 || input.moveVector.y !== 0) { this.switchState('Run'); return; }
     if (input.isRollPressed) { 
@@ -194,10 +201,10 @@ export class Player {
     }
   }
 
-  private updateAttack(dt: number, enemies: Enemy[], effectManager: EffectManager): void {
+  private updateAttack(dt: number, enemies: Enemy[], effectManager: EffectManager, soundManager: SoundManager): void {
     this.stateTimer += dt;
     if (!this.hasHitAttacked && this.stateTimer > 0.1 && this.stateTimer < 0.3) {
-      this.checkAttackHit(enemies, effectManager);
+      this.checkAttackHit(enemies, effectManager, soundManager);
       this.hasHitAttacked = true;
     }
     if (this.stateTimer >= this.attackDuration) {
@@ -205,7 +212,7 @@ export class Player {
     }
   }
 
-  private checkAttackHit(enemies: Enemy[], effectManager: EffectManager): void {
+  private checkAttackHit(enemies: Enemy[], effectManager: EffectManager, soundManager: SoundManager): void {
     const attackRange = 4.0; 
     const attackAngle = Math.PI / 2;
     const playerPos = this.mesh.position;
@@ -221,6 +228,9 @@ export class Player {
         
         if (angle <= attackAngle / 2) {
           enemy.takeDamage();
+          
+          soundManager.playHit();
+
           const effectPos = enemy.mesh.position.clone();
           effectPos.y += 1.5; 
           effectManager.spawnHitEffect(effectPos);
